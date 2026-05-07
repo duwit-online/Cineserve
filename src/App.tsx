@@ -50,7 +50,7 @@ export default function App() {
   const [tvDetails, setTvDetails] = useState<any | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<string | null>(null);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authError, setAuthError] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -108,7 +108,7 @@ export default function App() {
   const handleAuth = async (e: FormEvent) => {
     e.preventDefault();
     setAuthError("");
-    const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
+    const endpoint = authMode === "signin" ? "/api/auth/login" : "/api/auth/register";
     try {
       const res = await fetch(endpoint, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -116,15 +116,15 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        if (authMode === "login") {
+        if (authMode === "signin") {
           localStorage.setItem("cinode_token", data.token);
           localStorage.setItem("cinode_user", JSON.stringify(data.user));
           setToken(data.token);
           setUser(data.user);
           setView("home");
         } else {
-          setAuthMode("login");
-          setAuthError("Registered! Login now.");
+          setAuthMode("signin");
+          setAuthError("Sign up successful! Sign in now.");
         }
       } else setAuthError(data.message);
     } catch (e) { setAuthError("Server unreachable"); }
@@ -242,14 +242,14 @@ export default function App() {
                  <input value={username} onChange={e => setUsername(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/50 text-sm" placeholder="Username" />
                  <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-primary/50 text-sm" placeholder="Passcode" />
                  <button type="submit" className="w-full bg-primary text-white font-black py-4 rounded-xl hover:opacity-90 active:scale-[0.98] transition-all shadow-xl uppercase tracking-widest text-xs">
-                    {authMode === 'login' ? 'Sync Profile' : 'Register Protocol'}
+                    {authMode === 'signin' ? 'Sign In' : 'Sign Up'}
                  </button>
               </form>
               <button 
-                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+                onClick={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
                 className="w-full text-[10px] text-gray-500 hover:text-white transition-colors font-bold uppercase tracking-widest"
               >
-                {authMode === 'login' ? "Deploy New Instance" : "Retrace Session"}
+                {authMode === 'signin' ? "Need an account? Sign Up" : "Already have an account? Sign In"}
               </button>
            </motion.div>
         </div>

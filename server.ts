@@ -16,13 +16,13 @@ const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "cinode-secret-key";
 
 // Media Directories
-const MOVIES_DIR = path.join(process.cwd(), "media", "movies");
-const TV_DIR = path.join(process.cwd(), "media", "tv");
+const MOVIES_DIR = "/DATA/Media/Movies";
+const TV_DIR = "/DATA/Media/TV";
 
 // Ensure directories exist
-[MOVIES_DIR, TV_DIR].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+if (!fs.existsSync(MOVIES_DIR) || !fs.existsSync(TV_DIR)) {
+  console.warn("⚠️ Media directories not found at /DATA/Media. Please ensure paths are correct.");
+}
 
 app.use(express.json());
 
@@ -87,7 +87,8 @@ async function initDB() {
         year INT,
         genres VARCHAR(255),
         runtime VARCHAR(50),
-        backdrop VARCHAR(255)
+        backdrop VARCHAR(255),
+        poster VARCHAR(255)
       )
     `);
 
@@ -121,8 +122,8 @@ const mockProgress: Record<string, any> = {};
 
 // --- Helper: Metadata Fetcher ---
 async function getEnhancedMetadata(mediaId: string, type: string, titleHint: string) {
-  // If we have a TMDB_API_KEY in process.env, we'd use it here.
-  // For now, we'll provide simulated results that look great.
+  const TMDB_API_KEY = process.env.TMDB_API_KEY;
+  
   if (pool) {
     const [rows]: any = await pool.query("SELECT * FROM metadata WHERE media_id = ?", [mediaId]);
     if (rows.length > 0) return rows[0];
@@ -130,7 +131,7 @@ async function getEnhancedMetadata(mediaId: string, type: string, titleHint: str
     return mockMetadata[mediaId];
   }
 
-  const simulated = {
+  let metadata = {
     media_id: mediaId,
     media_type: type,
     plot: `In a world of high-stakes digital espionage, ${titleHint} follows a small band of resistance fighters uncovering a conspiracy that could reset humanity.`,
@@ -140,15 +141,50 @@ async function getEnhancedMetadata(mediaId: string, type: string, titleHint: str
     year: 2024,
     genres: "Sci-Fi, Action, Thriller",
     runtime: "2h 14m",
-    backdrop: `https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=2000&auto=format&fit=crop`
+    backdrop: `https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=2000&auto=format&fit=crop`,
+    poster: `https://images.unsplash.com/photo-1542204111-97b779407ec7?q=80&w=400&h=600&auto=format&fit=crop`
   };
 
-  if (pool) {
-    await pool.query("INSERT INTO metadata SET ?", simulated).catch(() => {});
-  } else {
-    mockMetadata[mediaId] = simulated;
+  if (TMDB_API_KEY) {
+    try {
+      const searchType = type === 'movie' ? 'movie' : 'tv';
+      const searchUrl = `https://api.themoviedb.org/3/search/${searchType}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(titleHint)}`;
+      const searchRes = await fetch(searchUrl);
+      const searchData: any = await searchRes.json();
+
+      if (searchData.results && searchData.results.length > 0) {
+        const bestMatch = searchData.results[0];
+        const detailsUrl = `https://api.themoviedb.org/3/${searchType}/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=credits`;
+        const detailsRes = await fetch(detailsUrl);
+        const details: any = await detailsRes.json();
+
+        metadata = {
+          media_id: mediaId,
+          media_type: type,
+          plot: details.overview || metadata.plot,
+          cast: details.credits?.cast?.slice(0, 5).map((c: any) => c.name).join(", ") || metadata.cast,
+          director: details.credits?.crew?.find((c: any) => c.job === 'Director')?.name || metadata.director,
+          rating: details.vote_average || metadata.rating,
+          year: parseInt((details.release_date || details.first_air_date || "2024").substring(0, 4)),
+          genres: details.genres?.map((g: any) => g.name).join(", ") || metadata.genres,
+          runtime: details.runtime ? `${details.runtime}m` : (details.episode_run_time ? `${details.episode_run_time[0]}m` : metadata.runtime),
+          backdrop: details.backdrop_path ? `https://image.tmdb.org/t/p/original${details.backdrop_path}` : metadata.backdrop,
+          poster: details.poster_path ? `https://image.tmdb.org/t/p/w500${details.poster_path}` : metadata.poster
+        } as any;
+      }
+    } catch (e) {
+      console.warn("TMDB Fetch Failed:", e);
+    }
   }
-  return simulated;
+
+  if (pool) {
+    await pool.query("INSERT INTO metadata (media_id, media_type, plot, cast, director, rating, year, genres, runtime, backdrop, poster) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE plot=VALUES(plot), backdrop=VALUES(backdrop), poster=VALUES(poster)", 
+      [metadata.media_id, metadata.media_type, metadata.plot, metadata.cast, metadata.director, metadata.rating, metadata.year, metadata.genres, metadata.runtime, metadata.backdrop, (metadata as any).poster]
+    ).catch(err => console.error("Metadata save failed:", err));
+  } else {
+    mockMetadata[mediaId] = metadata;
+  }
+  return metadata;
 }
 
 // --- Auth Middleware ---
@@ -177,9 +213,13 @@ app.post("/api/auth/register", async (req, res) => {
       if (mockUsers.find(u => u.username === username)) return res.status(400).json({ message: "Username exists" });
       mockUsers.push({ id: Date.now(), username, password: hashed, theme: 'bento' });
     }
-    res.json({ message: "User registered" });
-  } catch (e) {
-    res.status(500).json({ message: "Registration failed" });
+    res.json({ message: "Sign up successful" });
+  } catch (e: any) {
+    console.error("Registration Error:", e);
+    if (e.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ message: "Username already taken" });
+    }
+    res.status(500).json({ message: "Sign up failed: " + e.message });
   }
 });
 
@@ -467,7 +507,8 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`\n\x1b[32m  ➜  \x1b[1mCinode Server\x1b[0m: \x1b[36mhttp://0.0.0.0:${PORT}\x1b[0m`);
+    console.log(`\x1b[32m  ➜  \x1b[1mExternal Access\x1b[0m: Check your environment port mapping\x1b[0m\n`);
   });
 }
 

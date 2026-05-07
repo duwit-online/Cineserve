@@ -1,20 +1,52 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 🎬 Cinode
 
-# Run and deploy your AI Studio app
+A modern, high-performance media streaming server with a youthful "Netflix-style" interface. Cinode turns your local media directory into a fully-featured streaming platform with advanced metadata, progress tracking, and cross-device responsiveness.
 
-This contains everything you need to run your app locally.
+## ✨ Key Features
 
-View your app in AI Studio: https://ai.studio/apps/a36fc5de-051b-4d6d-9ccb-8d7a5051906c
+- **Modern UI**: Bento-grid and horizontal shelf layouts designed for Phones, Tablets, Desktops, and Smart TVs.
+- **Advanced Metadata**: Automatic scraping of plots, cast, ratings, and backdrops for your media.
+- **Playback Progress**: Resume watching right where you left off on any device.
+- **Smart Filters**: Filter by genre, year, and rating with instant results.
+- **Multi-user Ready**: Secure authentication (JWT) and personalized watchlists/history.
+- **Responsive Player**: Custom playback speeds and subtitle support.
 
-## Run Locally
+## 🚀 Getting Started
 
-**Prerequisites:**  Node.js
+### Prerequisites
+- Node.js (v18+)
+- MySQL Database (Recommended for production)
 
+### Installation
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. **Clone the repository**
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+3. **Configure Environment**:
+   Copy `.env.example` to `.env` and fill in your credentials:
+   ```bash
+   cp .env.example .env
+   ```
+4. **Run in Development**:
+   ```bash
+   npm run dev
+   ```
+
+## 📂 Media Structure
+
+Place your media in the following directory structure:
+- `/media/movies/file.mp4`
+- `/media/tv/ShowName/Episode01.mp4`
+
+## 🛠️ Tech Stack
+
+- **Frontend**: React 18, Vite, Tailwind CSS, Motion (Framer Motion).
+- **Backend**: Node.js, Express, MySQL.
+- **Auth**: JSON Web Tokens (JWT) + Bcrypt.
+- **Scraping**: Simulated enhanced metadata engine (DB backed).
+
+---
+
+*Note: For GitHub deployments, ensure your `.env` variables are added to your environment secrets.*
