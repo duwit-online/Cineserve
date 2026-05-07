@@ -8,6 +8,13 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { fileURLToPath } from "url";
 import os from "os";
+import OpenSubtitles from "opensubtitles-api";
+import srt2vtt from "srt-to-vtt";
+
+const OS = new OpenSubtitles({
+    useragent: 'UserAgent',
+    ssl: true
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,21 +112,33 @@ async function initDB() {
         media_type ENUM('movie', 'tv') NOT NULL,
         plot TEXT,
         cast TEXT,
+        crew TEXT,
         director VARCHAR(255),
         rating DECIMAL(3,1),
         year INT,
         genres VARCHAR(255),
         runtime VARCHAR(50),
         backdrop VARCHAR(255),
-        poster VARCHAR(255)
+        poster VARCHAR(255),
+        tagline VARCHAR(255),
+        status VARCHAR(50),
+        production_companies TEXT,
+        recommendations TEXT,
+        file_path TEXT,
+        tmdb_id INT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
     `);
 
     try {
       const [mCols]: any = await pool.query("SHOW COLUMNS FROM metadata");
       const mColNames = mCols.map((c: any) => c.Field);
-      if (!mColNames.includes('poster')) {
-        await pool.query("ALTER TABLE metadata ADD COLUMN poster VARCHAR(255)");
+      const requiredCols = ['crew', 'tagline', 'status', 'production_companies', 'recommendations', 'production_countries', 'file_path', 'tmdb_id'];
+      for (const col of requiredCols) {
+        if (!mColNames.includes(col)) {
+          const type = (col === 'tmdb_id') ? 'INT' : 'TEXT';
+          await pool.query(`ALTER TABLE metadata ADD COLUMN ${col} ${type}`);
+        }
       }
     } catch (e) {
       console.warn("Metadata verification failed:", e);
@@ -154,26 +173,46 @@ const mockMetadata: Record<string, any> = {};
 const mockProgress: Record<string, any> = {};
 
 // --- Helper: Metadata Fetcher ---
-async function getEnhancedMetadata(mediaId: string, type: string, titleHint: string) {
+async function getEnhancedMetadata(mediaId: string, type: string, titleHint: string, filePath?: string) {
   const TMDB_API_KEY = process.env.TMDB_API_KEY;
   
   if (pool) {
     const [rows]: any = await pool.query("SELECT * FROM metadata WHERE media_id = ?", [mediaId]);
-    if (rows.length > 0) return rows[0];
+    if (rows.length > 0) {
+      const row = rows[0];
+      // Update filePath if provided and different
+      if (filePath && row.file_path !== filePath) {
+        await pool.query("UPDATE metadata SET file_path = ? WHERE media_id = ?", [filePath, mediaId]);
+      }
+      try {
+        if (row.production_companies) row.production_companies = JSON.parse(row.production_companies);
+        if (row.recommendations) row.recommendations = JSON.parse(row.recommendations);
+        if (row.crew) row.crew = JSON.parse(row.crew);
+        if (row.production_countries) row.production_countries = JSON.parse(row.production_countries);
+      } catch (e) {}
+      return row;
+    }
   } else if (mockMetadata[mediaId]) {
     return mockMetadata[mediaId];
   }
 
-  let metadata = {
+  let metadata: any = {
     media_id: mediaId,
     media_type: type,
-    plot: `In a world of high-stakes digital espionage, ${titleHint} follows a small band of resistance fighters uncovering a conspiracy that could reset humanity.`,
-    cast: "Caleb McLaughlin, Florence Pugh, Lakeith Stanfield",
-    director: "Denis Villeneuve",
-    rating: 8.4,
+    plot: `Discover the story behind ${titleHint}. A cinematic experience that pushes boundaries and explores new horizons in storytelling.`,
+    cast: "Various Artists",
+    crew: [],
+    director: "Unknown",
+    rating: 7.0,
     year: 2024,
-    genres: "Sci-Fi, Action, Thriller",
-    runtime: "2h 14m",
+    genres: "Drama",
+    runtime: "N/A",
+    tagline: "Uncover the truth.",
+    status: "Released",
+    production_companies: [],
+    recommendations: [],
+    file_path: filePath || null,
+    tmdb_id: null,
     backdrop: `https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=2000&auto=format&fit=crop`,
     poster: `https://images.unsplash.com/photo-1542204111-97b779407ec7?q=80&w=400&h=600&auto=format&fit=crop`
   };
@@ -181,29 +220,33 @@ async function getEnhancedMetadata(mediaId: string, type: string, titleHint: str
   if (TMDB_API_KEY) {
     try {
       const searchType = type === 'movie' ? 'movie' : 'tv';
-      const searchUrl = `https://api.themoviedb.org/3/search/${searchType}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(titleHint)}`;
-      const searchRes = await fetch(searchUrl);
+      const searchRes = await fetch(`https://api.themoviedb.org/3/search/${searchType}?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(titleHint)}`);
       const searchData: any = await searchRes.json();
 
       if (searchData.results && searchData.results.length > 0) {
         const bestMatch = searchData.results[0];
-        const detailsUrl = `https://api.themoviedb.org/3/${searchType}/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=credits`;
-        const detailsRes = await fetch(detailsUrl);
+        const detailsRes = await fetch(`https://api.themoviedb.org/3/${searchType}/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=credits,recommendations,images`);
         const details: any = await detailsRes.json();
 
         metadata = {
-          media_id: mediaId,
-          media_type: type,
+          ...metadata,
+          tmdb_id: bestMatch.id,
           plot: details.overview || metadata.plot,
-          cast: details.credits?.cast?.slice(0, 5).map((c: any) => c.name).join(", ") || metadata.cast,
+          tagline: details.tagline || metadata.tagline,
+          status: details.status || metadata.status,
+          cast: details.credits?.cast?.slice(0, 10).map((c: any) => c.name).join(", ") || metadata.cast,
+          crew: details.credits?.crew?.filter((c: any) => ['Director', 'Producer', 'Writer', 'Director of Photography'].includes(c.job)).slice(0, 10).map((c: any) => ({ name: c.name, job: c.job })) || [],
           director: details.credits?.crew?.find((c: any) => c.job === 'Director')?.name || metadata.director,
           rating: details.vote_average || metadata.rating,
           year: parseInt((details.release_date || details.first_air_date || "2024").substring(0, 4)),
           genres: details.genres?.map((g: any) => g.name).join(", ") || metadata.genres,
           runtime: details.runtime ? `${details.runtime}m` : (details.episode_run_time ? `${details.episode_run_time[0]}m` : metadata.runtime),
+          production_companies: details.production_companies?.map((pc: any) => pc.name) || [],
+          production_countries: details.production_countries?.map((pc: any) => pc.name) || [],
+          recommendations: details.recommendations?.results?.slice(0, 10).map((r: any) => ({ id: r.id, title: r.title || r.name, poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null, type: searchType })) || [],
           backdrop: details.backdrop_path ? `https://image.tmdb.org/t/p/original${details.backdrop_path}` : metadata.backdrop,
           poster: details.poster_path ? `https://image.tmdb.org/t/p/w500${details.poster_path}` : metadata.poster
-        } as any;
+        };
       }
     } catch (e) {
       console.warn("TMDB Fetch Failed:", e);
@@ -211,9 +254,25 @@ async function getEnhancedMetadata(mediaId: string, type: string, titleHint: str
   }
 
   if (pool) {
-    await pool.query("INSERT INTO metadata (media_id, media_type, plot, cast, director, rating, year, genres, runtime, backdrop, poster) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE plot=VALUES(plot), backdrop=VALUES(backdrop), poster=VALUES(poster)", 
-      [metadata.media_id, metadata.media_type, metadata.plot, metadata.cast, metadata.director, metadata.rating, metadata.year, metadata.genres, metadata.runtime, metadata.backdrop, (metadata as any).poster]
-    ).catch(err => console.error("Metadata save failed:", err));
+    const query = `
+      INSERT INTO metadata 
+      (media_id, media_type, plot, cast, crew, director, rating, year, genres, runtime, backdrop, poster, tagline, status, production_companies, recommendations, production_countries, file_path, tmdb_id) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+      ON DUPLICATE KEY UPDATE 
+      plot=VALUES(plot), backdrop=VALUES(backdrop), poster=VALUES(poster), tagline=VALUES(tagline), 
+      status=VALUES(status), production_companies=VALUES(production_companies), recommendations=VALUES(recommendations),
+      cast=VALUES(cast), crew=VALUES(crew), director=VALUES(director), rating=VALUES(rating), year=VALUES(year), 
+      genres=VALUES(genres), runtime=VALUES(runtime), production_countries=VALUES(production_countries), 
+      file_path=VALUES(file_path), tmdb_id=VALUES(tmdb_id)
+    `;
+    const params = [
+      metadata.media_id, metadata.media_type, metadata.plot, metadata.cast, JSON.stringify(metadata.crew), 
+      metadata.director, metadata.rating, metadata.year, metadata.genres, metadata.runtime, 
+      metadata.backdrop, metadata.poster, metadata.tagline, metadata.status, 
+      JSON.stringify(metadata.production_companies), JSON.stringify(metadata.recommendations),
+      JSON.stringify(metadata.production_countries || []), metadata.file_path, metadata.tmdb_id
+    ];
+    await pool.query(query, params).catch(err => console.error("Metadata save failed:", err));
   } else {
     mockMetadata[mediaId] = metadata;
   }
@@ -422,33 +481,107 @@ app.post("/api/progress", authenticateToken, async (req: any, res) => {
   }
 });
 
+// Trending & Categories
+app.get("/api/trending", authenticateToken, async (req, res) => {
+  const TMDB_API_KEY = process.env.TMDB_API_KEY;
+  if (!TMDB_API_KEY) return res.json([]);
+  try {
+    const response = await fetch(`https://api.themoviedb.org/3/trending/all/day?api_key=${TMDB_API_KEY}`);
+    const data: any = await response.json();
+    const trending = data.results.map((r: any) => ({
+      id: r.id.toString(),
+      title: r.title || r.name,
+      poster: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : null,
+      backdrop: r.backdrop_path ? `https://image.tmdb.org/t/p/original${r.backdrop_path}` : null,
+      media_type: r.media_type,
+      rating: r.vote_average,
+      year: parseInt((r.release_date || r.first_air_date || "2024").substring(0, 4)),
+      is_external: true
+    }));
+    res.json(trending);
+  } catch (e) {
+    res.status(500).json({ message: "Failed to fetch trending" });
+  }
+});
+
+async function scanMoviesRecursive(dir: string, baseDir: string = ""): Promise<any[]> {
+  const result: any[] = [];
+  if (!fs.existsSync(dir)) return result;
+  
+  const entries = fs.readdirSync(dir).filter(f => !f.startsWith("."));
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry);
+    const relPath = baseDir ? path.join(baseDir, entry) : entry;
+    
+    try {
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) {
+        const subResults = await scanMoviesRecursive(fullPath, relPath);
+        result.push(...subResults);
+      } else if (stat.isFile() && VIDEO_EXTENSIONS.includes(path.extname(entry).toLowerCase())) {
+        // If it's your structure: Movies/Title (Year)/File.mp4
+        // baseDir will be "Title (Year)"
+        const title = baseDir ? path.basename(baseDir) : entry.replace(/\.[^/.]+$/, "").replace(/[._-]/g, " ");
+        // Stable ID based on relative path
+        const id = Buffer.from(relPath).toString('hex').slice(0, 16);
+        result.push({ id, title, file: relPath });
+      }
+    } catch (e) {
+      console.warn(`Error scanning path: ${fullPath}`, e);
+    }
+  }
+  return result;
+}
+
 // Media Routes (Protected)
+app.get("/api/media/categories", authenticateToken, async (req, res) => {
+  try {
+    if (!pool) return res.json({});
+    
+    const [movies]: any = await pool.query("SELECT * FROM metadata WHERE media_type = 'movie' ORDER BY rating DESC");
+    const [shows]: any = await pool.query("SELECT * FROM metadata WHERE media_type = 'tv' ORDER BY rating DESC");
+
+    const categories: Record<string, any[]> = {
+      "Highly Rated (8.0+)": [...movies, ...shows].filter(m => m.rating >= 8.0).sort((a, b) => b.rating - a.rating).slice(0, 18),
+      "Action & Adventure": [...movies, ...shows].filter(m => m.genres?.includes("Action") || m.genres?.includes("Adventure")).slice(0, 18),
+      "Sci-Fi & Fantasy": [...movies, ...shows].filter(m => m.genres?.includes("Science Fiction") || m.genres?.includes("Fantasy") || m.genres?.includes("Sci-Fi")).slice(0, 18),
+      "Horror & Thriller": [...movies, ...shows].filter(m => m.genres?.includes("Horror") || m.genres?.includes("Thriller") || m.genres?.includes("Mystery")).slice(0, 18),
+      "Animation": [...movies, ...shows].filter(m => m.genres?.includes("Animation") || m.genres?.includes("Family")).slice(0, 18),
+      "Comedy": [...movies, ...shows].filter(m => m.genres?.includes("Comedy")).slice(0, 18),
+      "Drama": [...movies, ...shows].filter(m => m.genres?.includes("Drama")).slice(0, 18),
+      "International Hits": [...movies, ...shows].filter(m => {
+        const countries = m.production_countries || [];
+        return countries.some((c: string) => !c.includes("United States"));
+      }).slice(0, 18),
+      "Modern Era (2020+)": [...movies, ...shows].filter(m => m.year >= 2020).sort((a, b) => b.year - a.year).slice(0, 18),
+      "Classics of the 90s": [...movies, ...shows].filter(m => m.year >= 1990 && m.year < 2000).slice(0, 18),
+      "Epic Lengths": movies.filter(m => {
+        const mins = parseInt(m.runtime || "0");
+        return mins > 140;
+      }).slice(0, 18),
+      "Recently Added": [...movies, ...shows].sort((a, b) => b.id - a.id).slice(0, 18),
+    };
+
+    // Ensure categorical items have the necessary ID/file fields correctly mapped
+    Object.keys(categories).forEach(key => {
+      categories[key] = categories[key].map(m => ({
+        ...m,
+        id: m.media_id,
+        // For shows, id stays same. For movies, we might need the actual file if it's missing
+        // but it should be in the DB already.
+      }));
+    });
+
+    res.json(categories);
+  } catch (e) {
+    res.status(500).json({ message: "Failed to load categories" });
+  }
+});
 app.get("/api/movies", authenticateToken, async (req, res) => {
   try {
-    if (!fs.existsSync(MOVIES_DIR)) return res.json([]);
-    const entries = fs.readdirSync(MOVIES_DIR).filter(f => !f.startsWith("."));
-    const moviesList: any[] = [];
-
-    for (const entry of entries) {
-      const fullPath = path.join(MOVIES_DIR, entry);
-      const stat = fs.statSync(fullPath);
-      
-      if (stat.isFile()) {
-        const ext = path.extname(entry).toLowerCase();
-        if (VIDEO_EXTENSIONS.includes(ext)) {
-          moviesList.push({ id: entry, title: entry.replace(/\.[^/.]+$/, "").replace(/[._-]/g, " "), file: entry });
-        }
-      } else if (stat.isDirectory()) {
-        // Look for any video file inside
-        const subFiles = fs.readdirSync(fullPath).filter(f => VIDEO_EXTENSIONS.includes(path.extname(f).toLowerCase()));
-        if (subFiles.length > 0) {
-          moviesList.push({ id: entry, title: entry.replace(/[._-]/g, " "), file: path.join(entry, subFiles[0]) });
-        }
-      }
-    }
-
+    const moviesList = await scanMoviesRecursive(MOVIES_DIR);
     const movies = await Promise.all(moviesList.map(async m => {
-      const meta = await getEnhancedMetadata(m.id, "movie", m.title);
+      const meta = await getEnhancedMetadata(m.id, "movie", m.title, m.file);
       return {
         ...m,
         poster: meta.poster || null,
@@ -505,9 +638,9 @@ app.get("/api/tv/:id", authenticateToken, async (req, res) => {
         if (stat.isDirectory()) {
           findVideos(fullPath, relPath);
         } else if (stat.isFile() && VIDEO_EXTENSIONS.includes(path.extname(entry).toLowerCase())) {
-          // Determine season
+          // Robust season detection for structure like /Show/Season 1/Episode.mkv
           let season = "1";
-          const seasonMatch = relPath.match(/Season\s*(\d+)/i) || relPath.match(/S(\d+)/i);
+          const seasonMatch = relPath.match(/(?:Season|S)\s*(\d+)/i);
           if (seasonMatch) season = parseInt(seasonMatch[1]).toString();
           
           if (!seasons[season]) seasons[season] = [];
@@ -525,6 +658,65 @@ app.get("/api/tv/:id", authenticateToken, async (req, res) => {
   } catch (e) {
     console.error("TV Show Details Error:", e);
     res.status(500).json({ message: "Failed to load show details" });
+  }
+});
+
+app.get("/api/subtitles/online", authenticateToken, async (req: any, res) => {
+  const { imdbid, tmdbid, type, filename, season, episode } = req.query;
+  try {
+    const searchParams: any = {
+      sublanguageid: 'eng', // Default to english for now
+      limit: '5',
+    };
+
+    if (imdbid) searchParams.imdbid = imdbid;
+    if (tmdbid) searchParams.tmdbid = tmdbid;
+    if (type === 'tv') {
+      searchParams.season = season;
+      searchParams.episode = episode;
+    }
+    if (filename) searchParams.filename = filename;
+
+    const results = await OS.search(searchParams);
+    
+    // Format results to be easily consumable by frontend
+    const formatted = Object.entries(results).map(([lang, data]: [string, any]) => ({
+      lang,
+      ...data
+    })).filter(d => d.url); // Only those with download urls
+
+    res.json(formatted);
+  } catch (e) {
+    console.error("Subtitle search failed:", e);
+    res.status(500).json({ error: "Failed to search subtitles" });
+  }
+});
+
+// Proxy to download and convert srt to vtt on the fly
+app.get("/api/subtitles/download", async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send("No URL provided");
+
+  try {
+    const response = await fetch(url as string);
+    if (!response.ok) throw new Error("Failed to fetch subtitle");
+    
+    const srtData = await response.arrayBuffer();
+    const buffer = Buffer.from(srtData);
+
+    res.setHeader("Content-Type", "text/vtt");
+    
+    // Create a stream and pipe it through srt2vtt
+    const { Readable } = await import("stream");
+    const readable = Readable.from(buffer);
+    
+    readable
+      .pipe(srt2vtt())
+      .pipe(res);
+
+  } catch (e) {
+    console.error("Subtitle download/convert failed:", e);
+    res.status(500).send("Error processing subtitle");
   }
 });
 
@@ -548,12 +740,30 @@ app.get("/api/subtitles/:type/:id/:episode?", authenticateToken, (req: any, res)
   res.status(404).json({ error: "No subtitles found" });
 });
 
-app.get("/api/stream/movie/*", authenticateToken, (req, res) => {
-  const filePath = path.join(MOVIES_DIR, (req.params as any)[0]);
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    res.status(404).json({ message: "File not found" });
+app.get("/api/stream/movie/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    let filePath = "";
+    
+    // Check if ID is a hex path
+    if (pool) {
+      const [rows]: any = await pool.query("SELECT file_path FROM metadata WHERE media_id = ?", [id]);
+      if (rows.length > 0) filePath = rows[0].file_path;
+    }
+
+    if (!filePath) {
+      // Fallback: assume ID is the path (old behavior)
+      filePath = id;
+    }
+
+    const fullPath = path.join(MOVIES_DIR, filePath);
+    if (fs.existsSync(fullPath)) {
+      res.sendFile(fullPath);
+    } else {
+      res.status(404).json({ message: "File not found" });
+    }
+  } catch (e) {
+    res.status(500).json({ message: "Streaming error" });
   }
 });
 

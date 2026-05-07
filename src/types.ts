@@ -3,12 +3,18 @@ export interface MediaMetadata {
   media_type: 'movie' | 'tv';
   plot?: string;
   cast?: string;
+  crew?: any[];
   director?: string;
   rating?: number;
   year?: number;
   genres?: string;
   runtime?: string;
   backdrop?: string;
+  poster?: string;
+  tagline?: string;
+  status?: string;
+  production_companies?: string[];
+  recommendations?: any[];
 }
 
 export interface MediaItem {

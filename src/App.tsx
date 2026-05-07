@@ -16,26 +16,49 @@ import {
   ArrowRight,
   Settings,
   History as HistoryIcon,
-  Bookmark
+  Bookmark,
+  Pause,
+  Maximize,
+  Minimize,
+  Volume2,
+  VolumeX,
+  FastForward,
+  Subtitles,
+  Zap,
+  RotateCcw,
+  SkipForward
 } from "lucide-react";
 
 import { MediaShelf } from "./components/MediaShelf";
 import { Hero } from "./components/Hero";
 import { FilterBar } from "./components/FilterBar";
+import { MediaDetailModal } from "./components/MediaDetailModal";
 import { MediaItem, MediaMetadata, PlaybackProgress, View } from "./types";
 
 export default function App() {
   const [user, setUser] = useState<{username: string, theme?: string} | null>(() => {
-    const saved = localStorage.getItem("cinode_user");
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem("cinode_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      console.error("Failed to parse cinode_user from localStorage", e);
+      return null;
+    }
   });
   const [token, setToken] = useState<string | null>(localStorage.getItem("cinode_token"));
   
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authError, setAuthError] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
   const [movies, setMovies] = useState<MediaItem[]>([]);
   const [shows, setShows] = useState<MediaItem[]>([]);
   const [watchlist, setWatchlist] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [progressData, setProgressData] = useState<PlaybackProgress[]>([]);
+  const [trending, setTrending] = useState<any[]>([]);
+  const [categories, setCategories] = useState<Record<string, any>>({});
   
   // Advanced Filters
   const [search, setSearch] = useState("");
@@ -44,19 +67,31 @@ export default function App() {
   const [rating, setRating] = useState("");
 
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [view, setView] = useState<View | 'player' | 'tv-details' | 'auth'>("home");
   const [activeTab, setActiveTab] = useState<"all" | "movies" | "tv">("all");
   
   const [tvDetails, setTvDetails] = useState<any | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<string | null>(null);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
-  const [authError, setAuthError] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
 
-  const playerRef = useRef<HTMLVideoElement>(null);
+  // Enhanced Player States
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [onlineSubtitles, setOnlineSubtitles] = useState<any[]>([]);
+  const [selectedOnlineSub, setSelectedOnlineSub] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSearchingSubs, setIsSearchingSubs] = useState(false);
+  
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastProgressRef = useRef<number>(0);
+  const playerRef = useRef<HTMLVideoElement>(null);
 
   // Initial Fetches
   useEffect(() => {
@@ -81,6 +116,12 @@ export default function App() {
     });
     fetch("/api/progress", { headers }).then(res => res.json()).then(data => {
       if (Array.isArray(data)) setProgressData(data);
+    });
+    fetch("/api/trending", { headers }).then(res => res.json()).then(data => {
+      if (Array.isArray(data)) setTrending(data);
+    });
+    fetch("/api/media/categories", { headers }).then(res => res.json()).then(data => {
+      if (data && typeof data === 'object' && !Array.isArray(data)) setCategories(data);
     });
 
     const handleScroll = () => setIsScrolled(window.scrollY > 0);
@@ -154,6 +195,14 @@ export default function App() {
   };
 
   const handleMediaClick = async (media: MediaItem) => {
+    // If it's a TV show ID from a category shelf, we might need to fetch its full object
+    // but the Modal handles metadata fine if passed.
+    setSelectedMedia(media);
+    setIsDetailOpen(true);
+  };
+
+  const handleStartPlayback = async (media: MediaItem) => {
+    setIsDetailOpen(false);
     setSelectedMedia(media);
     setCurrentEpisode(null);
     const type = media.file ? "movie" : "tv";
@@ -170,11 +219,101 @@ export default function App() {
   const handlePlayEpisode = (ep: string) => {
     setCurrentEpisode(ep);
     setView("player");
+    setIsPlaying(true);
+    setCurrentTime(0);
+    setSelectedOnlineSub(null);
+    setOnlineSubtitles([]);
+  };
+
+  const togglePlay = () => {
+    if (!playerRef.current) return;
+    if (isPlaying) playerRef.current.pause();
+    else playerRef.current.play();
+    setIsPlaying(!isPlaying);
+  };
+
+  const skipForward = (seconds: number) => {
+    if (!playerRef.current) return;
+    playerRef.current.currentTime += seconds;
+  };
+
+  const skipBackward = (seconds: number) => {
+    if (!playerRef.current) return;
+    playerRef.current.currentTime -= seconds;
+  };
+
+  const skipIntro = () => {
+    if (!playerRef.current) return;
+    playerRef.current.currentTime += 85;
+  };
+
+  const toggleMute = () => {
+    if (!playerRef.current) return;
+    playerRef.current.muted = !isMuted;
+    setIsMuted(!isMuted);
+  };
+
+  const handleVolumeChange = (v: number) => {
+    if (!playerRef.current) return;
+    playerRef.current.volume = v;
+    setVolume(v);
+    setIsMuted(v === 0);
+  };
+
+  const handleSpeedChange = (speed: number) => {
+    if (!playerRef.current) return;
+    playerRef.current.playbackRate = speed;
+    setPlaybackSpeed(speed);
+  };
+
+  const handleMouseMove = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying && !isSettingsOpen) setShowControls(false);
+    }, 3000);
+  };
+
+  const searchSubtitlesOnline = async () => {
+    if (!selectedMedia) return;
+    setIsSearchingSubs(true);
+    try {
+      const tmdbId = selectedMedia.metadata?.tmdb_id || selectedMedia.id;
+      const type = selectedMedia.metadata?.media_type || (selectedMedia.file ? 'movie' : 'tv');
+      const q = new URLSearchParams({
+        tmdbid: tmdbId.toString(),
+        type,
+        filename: currentEpisode || ''
+      });
+      if (type === 'tv' && currentEpisode) {
+        const match = currentEpisode.match(/S(\d+)E(\d+)/i);
+        if (match) {
+          q.append('season', parseInt(match[1]).toString());
+          q.append('episode', parseInt(match[2]).toString());
+        }
+      }
+      const res = await fetch(`/api/subtitles/online?${q}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setOnlineSubtitles(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("Online sub search failed", e);
+    } finally {
+      setIsSearchingSubs(false);
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h > 0 ? h + ':' : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
   const saveProgress = async (pos: number, dur: number) => {
     if (!token || !selectedMedia) return;
-    const type = selectedMedia.file ? 'movie' : 'tv';
+    const type = selectedMedia.metadata?.media_type || (selectedMedia.file ? 'movie' : 'tv');
     await fetch("/api/progress", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
@@ -190,6 +329,8 @@ export default function App() {
 
   const onTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
+    setCurrentTime(video.currentTime);
+    setDuration(video.duration);
     if (Math.abs(video.currentTime - lastProgressRef.current) > 10) {
       lastProgressRef.current = video.currentTime;
       saveProgress(video.currentTime, video.duration);
@@ -293,7 +434,8 @@ export default function App() {
               {featured && !search && activeTab === "all" && (
                 <Hero 
                   item={featured} 
-                  onPlay={handleMediaClick} 
+                  onPlay={handleStartPlayback} 
+                  onInfo={handleMediaClick}
                   onAddToWatchlist={toggleWatchlist} 
                   isInWatchlist={(id) => watchlist.some(m => m.media_id === id)} 
                 />
@@ -337,21 +479,48 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <>
+                  <div className="space-y-12 mb-20">
                     <MediaShelf 
-                      title="Movies Collection" 
+                      title="Cinode Original Movies" 
                       items={movies} 
                       onSelect={handleMediaClick}
                       onAddToWatchlist={toggleWatchlist}
                       isInWatchlist={(id) => watchlist.some(m => m.media_id === id)}
                     />
+
+                    {trending.length > 0 && (
+                       <MediaShelf 
+                        title="Trending Global (TMDB)" 
+                        items={trending} 
+                        onSelect={handleMediaClick}
+                        onAddToWatchlist={toggleWatchlist}
+                        isInWatchlist={(id) => watchlist.some(m => m.media_id === id)}
+                        variant="poster"
+                      />
+                    )}
+
+                    {Object.entries(categories || {}).map(([name, items]: [string, any]) => (
+                      items.length > 0 && (
+                        <MediaShelf 
+                          key={name}
+                          title={name} 
+                          items={items}
+                          onSelect={handleMediaClick}
+                          onAddToWatchlist={toggleWatchlist}
+                          isInWatchlist={(id) => watchlist.some(m => m.media_id === id)}
+                          variant={["Highly Rated (8.0+)", "Modern Era (2020+)", "Classics of the 90s"].includes(name) ? "poster" : "backdrop"}
+                        />
+                      )
+                    ))}
+
                     <MediaShelf 
-                      title="TV Series" 
+                      title="Popular Shows" 
                       items={shows} 
                       onSelect={handleMediaClick}
                       onAddToWatchlist={toggleWatchlist}
                       isInWatchlist={(id) => watchlist.some(m => m.media_id === id)}
                     />
+
                     {watchlist.length > 0 && (
                        <MediaShelf 
                         title="Your Watchlist" 
@@ -361,9 +530,20 @@ export default function App() {
                         isInWatchlist={(id) => watchlist.some(m => m.media_id === id)}
                       />
                     )}
-                  </>
+                  </div>
                 )}
               </div>
+              
+              {selectedMedia && (
+                <MediaDetailModal 
+                  item={selectedMedia}
+                  isOpen={isDetailOpen}
+                  onClose={() => setIsDetailOpen(false)}
+                  onPlay={handleStartPlayback}
+                  onToggleWatchlist={toggleWatchlist}
+                  isInWatchlist={(id) => watchlist.some(m => m.media_id === id)}
+                />
+              )}
             </main>
           )}
 
@@ -445,7 +625,7 @@ export default function App() {
                  </div>
                  
                  <div className="px-12 space-y-12 pb-20">
-                   {Object.entries(tvDetails.seasons).map(([season, episodes]) => (
+                   {Object.entries(tvDetails.seasons || {}).map(([season, episodes]) => (
                      <div key={season} className="space-y-4">
                        <h3 className="text-xs font-bold text-primary uppercase tracking-widest">Season {season}</h3>
                        <div className="grid gap-3">
@@ -470,30 +650,264 @@ export default function App() {
              )}
 
              {view === "player" && selectedMedia && (
-               <motion.div initial={{ opacity: 0, scale: 1.1 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[200] bg-black">
-                 <div className="absolute top-0 inset-x-0 p-8 flex items-center justify-between z-[210] bg-gradient-to-b from-black/80 to-transparent opacity-0 hover:opacity-100 transition-opacity">
-                    <button onClick={() => setView(tvDetails ? "tv-details" : "home")} className="flex items-center gap-4 group">
-                       <div className="p-3 glass rounded-full group-hover:bg-primary group-hover:text-black transition-all"><ChevronLeft /></div>
-                       <div className="text-left">
-                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{selectedMedia.title}</p>
-                          <p className="text-xs font-black uppercase tracking-tight">{currentEpisode || 'Full Movie'}</p>
-                       </div>
-                    </button>
-                 </div>
-                 <video 
-                   ref={playerRef}
-                   autoPlay controls className="w-full h-full"
-                   onTimeUpdate={onTimeUpdate}
-                   onPlay={onPlayerPlay}
-                   src={`${currentEpisode ? `/api/stream/tv/${selectedMedia.id}/${currentEpisode}` : `/api/stream/movie/${selectedMedia.id}`}?token=${token}`}
-                 >
-                    <track 
-                      label="English" kind="subtitles" srcLang="en" default
-                      src={`${currentEpisode ? `/api/subtitles/tv/${selectedMedia.id}/${currentEpisode}` : `/api/subtitles/movie/${selectedMedia.id}`}?token=${token}`}
-                    />
-                 </video>
-               </motion.div>
-             )}
+                <motion.div 
+                  initial={{ opacity: 0 }} 
+                  animate={{ opacity: 1 }} 
+                  exit={{ opacity: 0 }} 
+                  className="fixed inset-0 z-[200] bg-black group select-none overflow-hidden"
+                  onMouseMove={handleMouseMove}
+                  style={{ cursor: showControls ? 'default' : 'none' }}
+                >
+                  <video 
+                    ref={playerRef}
+                    autoPlay 
+                    className="w-full h-full"
+                    onTimeUpdate={onTimeUpdate}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onEnded={() => setView(tvDetails ? "tv-details" : "home")}
+                    src={`${currentEpisode ? `/api/stream/tv/${selectedMedia.id}/${encodeURIComponent(currentEpisode)}` : `/api/stream/movie/${encodeURIComponent(selectedMedia.file || selectedMedia.id)}`}?token=${token}`}
+                    onClick={togglePlay}
+                  >
+                     <track 
+                       label="Local English" kind="subtitles" srcLang="en" default
+                       src={`${currentEpisode ? `/api/subtitles/tv/${selectedMedia.id}/${encodeURIComponent(currentEpisode)}` : `/api/subtitles/movie/${encodeURIComponent(selectedMedia.file || selectedMedia.id)}`}?token=${token}`}
+                     />
+                     {selectedOnlineSub && (
+                        <track 
+                          key={selectedOnlineSub}
+                          label="Online Subtitle" kind="subtitles" srcLang="en" default
+                          src={`/api/subtitles/download?url=${encodeURIComponent(selectedOnlineSub)}`}
+                        />
+                     )}
+                  </video>
+
+                  <AnimatePresence>
+                    {showControls && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: -20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="absolute top-0 inset-x-0 p-8 flex items-center justify-between z-[220] bg-gradient-to-b from-black/95 to-transparent"
+                      >
+                        <button onClick={() => setView(tvDetails ? "tv-details" : "home")} className="flex items-center gap-4 group">
+                           <div className="p-3 glass rounded-full group-hover:bg-primary group-hover:text-black transition-all"><ChevronLeft /></div>
+                           <div className="text-left">
+                              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest leading-none mb-1">{selectedMedia.title}</p>
+                              <p className="text-sm font-black uppercase tracking-tight leading-none">{currentEpisode?.replace(/\.[^/.]+$/, "") || 'Full Movie'}</p>
+                           </div>
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {(showControls || !isPlaying) && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        className="absolute inset-0 flex items-center justify-center gap-16 z-[215]"
+                      >
+                         <button onClick={(e) => { e.stopPropagation(); skipBackward(10); }} className="p-4 text-white/50 hover:text-white transition-all"><RotateCcw size={48} /></button>
+                         <button onClick={(e) => { e.stopPropagation(); togglePlay(); }} className="p-10 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all backdrop-blur-xl border border-white/20">
+                           {isPlaying ? <Pause size={64} fill="currentColor" /> : <Play size={64} fill="currentColor" className="ml-2" />}
+                         </button>
+                         <button onClick={(e) => { e.stopPropagation(); skipForward(10); }} className="p-4 text-white/50 hover:text-white transition-all"><SkipForward size={48} /></button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {currentTime > 5 && currentTime < 150 && (
+                      <motion.div 
+                        initial={{ opacity: 0, x: 50 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 50 }}
+                        className="absolute bottom-44 right-12 z-[250]"
+                      >
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); skipIntro(); }}
+                          className="flex items-center gap-3 px-8 py-4 glass rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-white/20 border border-white/10 transition-all active:scale-95 shadow-2xl"
+                        >
+                          <Zap size={14} className="text-primary fill-primary" />
+                          Skip Intro
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {showControls && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 20 }}
+                        className="absolute bottom-0 inset-x-0 p-8 pt-32 space-y-6 z-[220] bg-gradient-to-t from-black/95 to-transparent"
+                      >
+                        <div className="space-y-3 group/timeline">
+                          <div className="flex justify-between text-[11px] font-mono font-bold text-gray-400 uppercase tracking-widest px-1">
+                            <span>{formatTime(currentTime)}</span>
+                            <span className="opacity-40">{formatTime(duration)}</span>
+                          </div>
+                          <div className="h-1.5 w-full bg-white/10 rounded-full relative group-hover/timeline:h-3 transition-all">
+                            <motion.div 
+                              className="absolute inset-y-0 left-0 bg-primary rounded-full z-20"
+                              style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}
+                            />
+                            <input 
+                              type="range" min={0} max={duration || 100} step="0.1" value={currentTime}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                if (playerRef.current) playerRef.current.currentTime = val;
+                                setCurrentTime(val);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute inset-0 w-full opacity-0 cursor-pointer z-30"
+                            />
+                            <div 
+                              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg opacity-0 group-hover/timeline:opacity-100 transition-opacity z-40 pointer-events-none"
+                              style={{ left: `calc(${(currentTime / (duration || 1)) * 100}% - 8px)` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-8">
+                            <div className="flex items-center gap-5 group/volume">
+                               <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="text-white/50 hover:text-white transition-colors">
+                                 {isMuted || volume === 0 ? <VolumeX size={22} /> : <Volume2 size={22} />}
+                               </button>
+                               <div className="w-0 group-hover/volume:w-32 overflow-hidden transition-all duration-500 ease-out flex items-center pr-2">
+                                 <input 
+                                   type="range" min="0" max="1" step="0.01" value={isMuted ? 0 : volume}
+                                   onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                                   onClick={(e) => e.stopPropagation()}
+                                   className="w-full accent-primary h-1 bg-white/20 rounded-full appearance-none cursor-pointer"
+                                 />
+                               </div>
+                            </div>
+
+                            <div className="flex items-center bg-white/5 rounded-2xl p-1 border border-white/5">
+                               {[0.5, 1, 1.25, 1.5, 2].map(s => (
+                                 <button 
+                                   key={s}
+                                   onClick={(e) => { e.stopPropagation(); handleSpeedChange(s); }}
+                                   className={`px-4 py-2 rounded-xl text-[10px] font-black tracking-tighter uppercase transition-all ${playbackSpeed === s ? 'bg-primary text-black' : 'text-gray-500 hover:text-white'}`}
+                                 >
+                                    {s}x
+                                 </button>
+                               ))}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-6">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setIsSettingsOpen(!isSettingsOpen);
+                                if (!onlineSubtitles.length) searchSubtitlesOnline();
+                              }} 
+                              className={`flex items-center gap-3 px-6 py-3 rounded-2xl transition-all border ${isSettingsOpen ? 'bg-primary border-primary text-black' : 'bg-white/5 border-transparent text-white/70 hover:bg-white/10'}`}
+                            >
+                               <Subtitles size={22} />
+                               <span className="text-[10px] font-black uppercase tracking-widest hidden lg:inline">Matrix Signals</span>
+                            </button>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); playerRef.current?.requestFullscreen(); }} 
+                              className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl text-white/70 hover:text-white transition-all hover:scale-105"
+                            >
+                              <Maximize size={22} />
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {isSettingsOpen && (
+                      <motion.div 
+                        initial={{ x: 500 }} animate={{ x: 0 }} exit={{ x: 500 }}
+                        className="absolute top-0 right-0 bottom-0 w-[450px] bg-black/60 backdrop-blur-3xl border-l border-white/10 z-[300] p-12 flex flex-col gap-12 shadow-[-40px_0_80px_rgba(0,0,0,0.8)]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                         <div className="flex items-center justify-between">
+                           <div>
+                              <h2 className="text-3xl font-black uppercase tracking-tighter">Cipher Stream</h2>
+                              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">Configuring subtitle decryption</p>
+                           </div>
+                           <button onClick={() => setIsSettingsOpen(false)} className="p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all active:scale-90"><Plus size={28} className="rotate-45" /></button>
+                         </div>
+
+                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-6 space-y-12">
+                            <section className="space-y-6">
+                              <p className="text-[10px] font-bold text-primary uppercase tracking-widest flex items-center gap-3">
+                                <List size={14} />
+                                Primary Channel (Local)
+                              </p>
+                              <button 
+                                onClick={() => setSelectedOnlineSub(null)}
+                                className={`w-full flex items-center justify-between p-6 rounded-3xl border transition-all ${!selectedOnlineSub ? 'bg-primary border-primary text-black shadow-lg shadow-primary/20' : 'bg-white/5 border-white/5 text-gray-500 hover:border-white/20'}`}
+                              >
+                                <div className="text-left">
+                                  <span className="text-base font-black uppercase tracking-tight">Embedded Data</span>
+                                  <p className="text-[10px] font-bold opacity-60 uppercase tracking-widest mt-1">Standard Node Stream</p>
+                                </div>
+                                {!selectedOnlineSub && <Check size={24} className="stroke-[3]" />}
+                              </button>
+                            </section>
+
+                            <section className="space-y-6">
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] font-bold text-primary uppercase tracking-widest flex items-center gap-3">
+                                  <Flame size={14} />
+                                  Satellite Uplinks (Online)
+                                </p>
+                                <button 
+                                  onClick={searchSubtitlesOnline} 
+                                  disabled={isSearchingSubs}
+                                  className="text-[10px] font-black text-white/40 flex items-center gap-2 uppercase tracking-widest hover:text-white transition-colors disabled:opacity-50"
+                                >
+                                  <RotateCcw size={14} className={isSearchingSubs ? 'animate-spin' : ''} />
+                                  Re-Ping
+                                </button>
+                              </div>
+                              
+                              <div className="space-y-4">
+                                {isSearchingSubs ? (
+                                  <div className="py-24 flex flex-col items-center justify-center gap-8">
+                                     <div className="w-16 h-16 border-[4px] border-primary/10 border-t-primary rounded-full animate-spin" />
+                                  </div>
+                                ) : onlineSubtitles.length > 0 ? (
+                                  onlineSubtitles.map((sub, i) => (
+                                    <button 
+                                      key={i}
+                                      onClick={() => setSelectedOnlineSub(sub.url)}
+                                      className={`w-full text-left p-6 rounded-3xl border transition-all group ${selectedOnlineSub === sub.url ? 'bg-primary border-primary text-black shadow-lg shadow-primary/20' : 'bg-white/5 border-white/5 text-gray-500 hover:border-white/20'}`}
+                                    >
+                                      <div className="flex justify-between items-start mb-2">
+                                         <p className="text-base font-black uppercase tracking-tight truncate flex-1">{sub.filename || sub.movie_name}</p>
+                                         <Check size={18} className={`ml-4 mt-1 shrink-0 ${selectedOnlineSub === sub.url ? 'opacity-100' : 'opacity-0'}`} />
+                                      </div>
+                                      <div className="flex items-center gap-4">
+                                         <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-lg ${selectedOnlineSub === sub.url ? 'bg-black/10' : 'bg-primary/20 text-primary'}`}>{sub.lang}</span>
+                                      </div>
+                                    </button>
+                                  ))
+                                ) : (
+                                  <div className="py-24 text-center space-y-4 opacity-40">
+                                     <Search size={40} className="mx-auto" />
+                                  </div>
+                                )}
+                              </div>
+                            </section>
+                         </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
+              )}
           </AnimatePresence>
         </>
       )}

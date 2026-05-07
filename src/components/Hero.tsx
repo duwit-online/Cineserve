@@ -6,11 +6,12 @@ import { MediaItem } from '../types';
 interface HeroProps {
   item: MediaItem;
   onPlay: (item: MediaItem) => void;
+  onInfo: (item: MediaItem) => void;
   onAddToWatchlist: (item: MediaItem) => void;
   isInWatchlist: (id: string) => boolean;
 }
 
-export const Hero: React.FC<HeroProps> = ({ item, onPlay, onAddToWatchlist, isInWatchlist }) => {
+export const Hero: React.FC<HeroProps> = ({ item, onPlay, onInfo, onAddToWatchlist, isInWatchlist }) => {
   return (
     <div className="relative h-[70vh] md:h-[85vh] w-full overflow-hidden">
       {/* Background Image */}
@@ -77,6 +78,7 @@ export const Hero: React.FC<HeroProps> = ({ item, onPlay, onAddToWatchlist, isIn
             </motion.button>
             <motion.button 
               whileTap={{ scale: 0.95 }}
+              onClick={() => onInfo(item)}
               className="flex items-center justify-center p-3 glass rounded-lg hover:bg-white/10 transition-colors"
             >
               <Info className="w-5 h-5" />

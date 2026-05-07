@@ -9,6 +9,7 @@ interface MediaShelfProps {
   onSelect: (item: MediaItem) => void;
   onAddToWatchlist: (item: MediaItem) => void;
   isInWatchlist: (id: string) => boolean;
+  variant?: 'poster' | 'backdrop';
 }
 
 export const MediaShelf: React.FC<MediaShelfProps> = ({ 
@@ -16,7 +17,8 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
   items, 
   onSelect, 
   onAddToWatchlist,
-  isInWatchlist 
+  isInWatchlist,
+  variant = 'backdrop'
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showLeftArrow, setShowLeftArrow] = useState(false);
@@ -84,16 +86,16 @@ export const MediaShelf: React.FC<MediaShelfProps> = ({
               key={item.id + idx}
               whileHover={{ scale: 1.15 }}
               transition={{ type: "spring", stiffness: 300, damping: 20 }}
-              className="shelf-card group cursor-pointer relative"
+              className={`shelf-card group cursor-pointer relative shrink-0 ${variant === 'poster' ? 'w-[160px] md:w-[220px] aspect-[2/3]' : 'w-[240px] md:w-[320px] aspect-video'}`}
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') onSelect(item);
               }}
             >
               <img 
-                src={item.metadata?.backdrop || `https://images.unsplash.com/photo-1542204111-97b779407ec7?q=80&w=400&h=600&auto=format&fit=crop`}
+                src={(variant === 'poster' ? item.metadata?.poster : item.metadata?.backdrop) || item.poster || `https://images.unsplash.com/photo-1542204111-97b779407ec7?q=80&w=400&h=600&auto=format&fit=crop`}
                 alt={item.title}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover rounded-lg"
                 loading="lazy"
               />
               
