@@ -7,6 +7,7 @@ import mysql from "mysql2/promise";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { fileURLToPath } from "url";
+import os from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,12 +17,29 @@ const PORT = 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "cinode-secret-key";
 
 // Media Directories
-const MOVIES_DIR = "/DATA/Media/Movies";
-const TV_DIR = "/DATA/Media/TV";
+const MOVIES_DIR = process.env.MOVIES_DIR || "/DATA/Media/Movies";
+const TV_DIR = process.env.TV_DIR || "/DATA/Media/TV";
+
+const VIDEO_EXTENSIONS = [".mp4", ".mkv", ".webm", ".avi", ".m4v", ".mov", ".flv", ".wmv"];
+
+function getNetworkIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    const ifaceList = interfaces[name];
+    if (ifaceList) {
+      for (const iface of ifaceList) {
+        if (iface.family === "IPv4" && !iface.internal) {
+          return iface.address;
+        }
+      }
+    }
+  }
+  return "0.0.0.0";
+}
 
 // Ensure directories exist
 if (!fs.existsSync(MOVIES_DIR) || !fs.existsSync(TV_DIR)) {
-  console.warn("⚠️ Media directories not found at /DATA/Media. Please ensure paths are correct.");
+  console.warn(`⚠️ Media directories not found. Movies: ${MOVIES_DIR}, TV: ${TV_DIR}`);
 }
 
 app.use(express.json());
@@ -50,6 +68,11 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Force add columns if table existed without them (brute force migration)
+    try { await pool.query("ALTER TABLE users ADD COLUMN username VARCHAR(255) UNIQUE NOT NULL AFTER id"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN password VARCHAR(255) NOT NULL AFTER username"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN theme VARCHAR(50) DEFAULT 'bento' AFTER password"); } catch (e) {}
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS watchlist (
@@ -91,6 +114,16 @@ async function initDB() {
         poster VARCHAR(255)
       )
     `);
+
+    try {
+      const [mCols]: any = await pool.query("SHOW COLUMNS FROM metadata");
+      const mColNames = mCols.map((c: any) => c.Field);
+      if (!mColNames.includes('poster')) {
+        await pool.query("ALTER TABLE metadata ADD COLUMN poster VARCHAR(255)");
+      }
+    } catch (e) {
+      console.warn("Metadata verification failed:", e);
+    }
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS playback_progress (
@@ -202,7 +235,7 @@ const authenticateToken = (req: any, res: any, next: any) => {
 };
 
 // --- Auth Routes ---
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/signup", async (req, res) => {
   const { username, password } = req.body;
   const hashed = await bcrypt.hash(password, 10);
   
@@ -223,7 +256,7 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/signin", async (req, res) => {
   const { username, password } = req.body;
   try {
     let user: any;
@@ -248,7 +281,7 @@ app.post("/api/auth/login", async (req, res) => {
       } 
     });
   } catch (error) {
-    res.status(500).json({ message: "Login failed" });
+    res.status(500).json({ message: "Sign in failed" });
   }
 });
 
@@ -392,28 +425,50 @@ app.post("/api/progress", authenticateToken, async (req: any, res) => {
 // Media Routes (Protected)
 app.get("/api/movies", authenticateToken, async (req, res) => {
   try {
-    const files = fs.readdirSync(MOVIES_DIR).filter(f => !f.startsWith(".") && (f.endsWith(".mp4") || f.endsWith(".mkv") || f.endsWith(".webm") || f.endsWith(".avi")));
-    const movies = await Promise.all(files.map(async f => {
-      const id = f;
-      const title = f.replace(/\.[^/.]+$/, "").replace(/[._-]/g, " ");
-      const meta = await getEnhancedMetadata(id, "movie", title);
+    if (!fs.existsSync(MOVIES_DIR)) return res.json([]);
+    const entries = fs.readdirSync(MOVIES_DIR).filter(f => !f.startsWith("."));
+    const moviesList: any[] = [];
+
+    for (const entry of entries) {
+      const fullPath = path.join(MOVIES_DIR, entry);
+      const stat = fs.statSync(fullPath);
+      
+      if (stat.isFile()) {
+        const ext = path.extname(entry).toLowerCase();
+        if (VIDEO_EXTENSIONS.includes(ext)) {
+          moviesList.push({ id: entry, title: entry.replace(/\.[^/.]+$/, "").replace(/[._-]/g, " "), file: entry });
+        }
+      } else if (stat.isDirectory()) {
+        // Look for any video file inside
+        const subFiles = fs.readdirSync(fullPath).filter(f => VIDEO_EXTENSIONS.includes(path.extname(f).toLowerCase()));
+        if (subFiles.length > 0) {
+          moviesList.push({ id: entry, title: entry.replace(/[._-]/g, " "), file: path.join(entry, subFiles[0]) });
+        }
+      }
+    }
+
+    const movies = await Promise.all(moviesList.map(async m => {
+      const meta = await getEnhancedMetadata(m.id, "movie", m.title);
       return {
-        id,
-        title,
+        ...m,
         poster: meta.poster || null,
-        file: f,
         metadata: meta
       };
     }));
     res.json(movies);
   } catch (e) {
+    console.error("Movie Scan Error:", e);
     res.status(500).json({ message: "Failed to scan movies" });
   }
 });
 
 app.get("/api/tv", authenticateToken, async (req, res) => {
   try {
-    const folders = fs.readdirSync(TV_DIR).filter(f => fs.statSync(path.join(TV_DIR, f)).isDirectory());
+    if (!fs.existsSync(TV_DIR)) return res.json([]);
+    const folders = fs.readdirSync(TV_DIR).filter(f => {
+      const fullPath = path.join(TV_DIR, f);
+      return fs.statSync(fullPath).isDirectory() && !f.startsWith(".");
+    });
     const shows = await Promise.all(folders.map(async f => {
       const id = f;
       const title = f.replace(/[._-]/g, " ");
@@ -428,6 +483,7 @@ app.get("/api/tv", authenticateToken, async (req, res) => {
     }));
     res.json(shows);
   } catch (e) {
+    console.error("TV Scan Error:", e);
     res.status(500).json({ message: "Failed to scan TV shows" });
   }
 });
@@ -435,17 +491,39 @@ app.get("/api/tv", authenticateToken, async (req, res) => {
 app.get("/api/tv/:id", authenticateToken, async (req, res) => {
   try {
     const showPath = path.join(TV_DIR, req.params.id);
+    if (!fs.existsSync(showPath)) return res.status(404).json({ message: "Show not found" });
+
     const seasons: Record<string, string[]> = {};
-    const files = fs.readdirSync(showPath).filter(f => !f.startsWith("."));
     
-    // Simple logic: group by first number found or just put in '1'
-    seasons["1"] = files;
+    function findVideos(dir: string, relativePrefix: string = "") {
+      const entries = fs.readdirSync(dir).filter(f => !f.startsWith("."));
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry);
+        const relPath = relativePrefix ? path.join(relativePrefix, entry) : entry;
+        const stat = fs.statSync(fullPath);
+        
+        if (stat.isDirectory()) {
+          findVideos(fullPath, relPath);
+        } else if (stat.isFile() && VIDEO_EXTENSIONS.includes(path.extname(entry).toLowerCase())) {
+          // Determine season
+          let season = "1";
+          const seasonMatch = relPath.match(/Season\s*(\d+)/i) || relPath.match(/S(\d+)/i);
+          if (seasonMatch) season = parseInt(seasonMatch[1]).toString();
+          
+          if (!seasons[season]) seasons[season] = [];
+          seasons[season].push(relPath);
+        }
+      }
+    }
+
+    findVideos(showPath);
     
     res.json({
       show: req.params.id,
       seasons
     });
   } catch (e) {
+    console.error("TV Show Details Error:", e);
     res.status(500).json({ message: "Failed to load show details" });
   }
 });
@@ -470,8 +548,8 @@ app.get("/api/subtitles/:type/:id/:episode?", authenticateToken, (req: any, res)
   res.status(404).json({ error: "No subtitles found" });
 });
 
-app.get("/api/stream/movie/:file", authenticateToken, (req, res) => {
-  const filePath = path.join(MOVIES_DIR, req.params.file);
+app.get("/api/stream/movie/*", authenticateToken, (req, res) => {
+  const filePath = path.join(MOVIES_DIR, (req.params as any)[0]);
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
   } else {
@@ -479,8 +557,8 @@ app.get("/api/stream/movie/:file", authenticateToken, (req, res) => {
   }
 });
 
-app.get("/api/stream/tv/:id/:file", authenticateToken, (req, res) => {
-  const filePath = path.join(TV_DIR, req.params.id, req.params.file);
+app.get("/api/stream/tv/:id/*", authenticateToken, (req, res) => {
+  const filePath = path.join(TV_DIR, req.params.id, (req.params as any)[0]);
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
   } else {
@@ -507,8 +585,10 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`\n\x1b[32m  ➜  \x1b[1mCinode Server\x1b[0m: \x1b[36mhttp://0.0.0.0:${PORT}\x1b[0m`);
-    console.log(`\x1b[32m  ➜  \x1b[1mExternal Access\x1b[0m: Check your environment port mapping\x1b[0m\n`);
+    const networkIP = getNetworkIP();
+    console.log(`\n\x1b[32m  ➜  \x1b[1mCinode Server\x1b[0m: \x1b[36mhttp://localhost:${PORT}\x1b[0m`);
+    console.log(`\x1b[32m  ➜  \x1b[1mNetwork Access\x1b[0m: \x1b[36mhttp://${networkIP}:${PORT}\x1b[0m`);
+    console.log(`\x1b[33m  ℹ  Note: To access worldwide, ensure port ${PORT} is open in your VPS firewall (e.g., sudo ufw allow ${PORT}).\x1b[0m\n`);
   });
 }
 

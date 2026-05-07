@@ -108,7 +108,7 @@ export default function App() {
   const handleAuth = async (e: FormEvent) => {
     e.preventDefault();
     setAuthError("");
-    const endpoint = authMode === "signin" ? "/api/auth/login" : "/api/auth/register";
+    const endpoint = authMode === "signin" ? "/api/auth/signin" : "/api/auth/signup";
     try {
       const res = await fetch(endpoint, {
         method: "POST", headers: { "Content-Type": "application/json" },
