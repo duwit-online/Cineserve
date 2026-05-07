@@ -11,6 +11,59 @@ A modern, high-performance media streaming server with a youthful "Netflix-style
 - **Multi-user Ready**: Secure authentication (JWT) with "Signin" and "Signup" simplified flows.
 - **Responsive Player**: Native HLS-like streaming with progress persistence across sessions.
 
+## 🚀 Getting Started
+
+### Prerequisites
+- Node.js (v18+)
+- MySQL Database
+- TMDB API Key (for metadata)
+
+### 1. Installation
+
+Clone the repository and install dependencies:
+```bash
+# Clone the repository
+git clone https://github.com/your-username/cinode.git
+cd cinode
+
+# Install required packages
+npm install
+```
+
+### 2. Configuration
+
+Set up your environment variables:
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Open .env and fill in your DB credentials and TMDB API key
+nano .env
+```
+
+### 3. VPS Firewall Setup
+
+Allow traffic on port 3000 to make Cinode reachable worldwide:
+```bash
+sudo ufw allow 3000
+```
+
+### 4. Running the App
+
+**Development Mode:**
+```bash
+npm run dev
+```
+
+**Production Mode (Recommended for VPS):**
+```bash
+# Build the frontend assets
+npm run build
+
+# Start the production server
+npm start
+```
+
 ## 📂 Media Structure
 
 By default, Cinode looks for media in root-level directories on your Ubuntu server. You can change these in your `.env` file.
