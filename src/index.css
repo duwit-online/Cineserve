@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  
+  --color-primary: #e50914; /* Cinema Red */
+  --color-accent: #00ffcc; /* Youthful Neon */
+  --color-bg: #050505;
+  --color-surface: #121212;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-white font-sans antialiased overflow-x-hidden;
+    background: radial-gradient(circle at 50% -20%, #1a1a1a 0%, #050505 100%);
+  }
+
+  /* Custom Scrollbar for Shelves */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full hover:bg-white/30 transition-colors;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply backdrop-blur-2xl bg-black/40 border border-white/5;
+  }
+  
+  .shelf-container {
+    @apply flex overflow-x-auto gap-3 md:gap-5 px-6 md:px-12 py-6 snap-x;
+    scroll-behavior: smooth;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+  }
+
+  .shelf-container::-webkit-scrollbar {
+    display: none; /* Safari and Chrome */
+  }
+
+  .shelf-card {
+    @apply relative flex-shrink-0 w-36 md:w-52 aspect-[2/3] rounded-lg overflow-hidden snap-start transition-all duration-500 ease-out;
+  }
+
+  /* Focus ring for Smart TV navigation */
+  .shelf-card:focus-visible, .nav-item:focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-4 ring-offset-black scale-105 z-10;
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer components {
+  .hero-gradient {
+    background: linear-gradient(to top, #050505 0%, transparent 70%),
+                linear-gradient(to right, #050505 0%, transparent 50%);
+  }
+}
+
+.atmosphere-glow {
+  @apply fixed inset-0 pointer-events-none z-[-1];
+  background: radial-gradient(circle at 10% 10%, rgba(229, 9, 20, 0.08) 0%, transparent 40%),
+              radial-gradient(circle at 90% 90%, rgba(0, 255, 204, 0.08) 0%, transparent 40%);
+}
+
+/* Modal and Overlays */
+.modal-overlay {
+  @apply fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4;
+}
